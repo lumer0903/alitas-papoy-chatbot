@@ -9,7 +9,7 @@ const { handleMessage } = require('./botLogic');
 const app = express();
 const port = Number(process.env.PORT || 3000);
 
-// Usar carpeta /tmp en Vercel/Serverless para evitar errores de lectura/escritura
+// En Vercel usamos /tmp para evitar errores de permisos
 const isServerless = Boolean(process.env.VERCEL);
 const storageDir = isServerless ? '/tmp' : __dirname;
 const ordersPath = path.join(storageDir, 'pedidos.json');
@@ -17,7 +17,6 @@ const idempotencyPath = path.join(storageDir, 'webhook-events.json');
 
 let fileQueue = Promise.resolve();
 
-// Raw Body para mantener la verificación de firma exacta
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buffer) => { req.rawBody = Buffer.from(buffer); }
@@ -39,11 +38,7 @@ function validSignature(req) {
 
 async function readJson(file, fallback) {
   try { return JSON.parse(await fs.readFile(file, 'utf8')); }
-  catch (error) {
-    if (error.code === 'ENOENT') return fallback;
-    console.warn(`[storage] Aviso al leer ${file}:`, error.message);
-    return fallback;
-  }
+  catch (error) { return fallback; }
 }
 
 function writeSerialized(action) {
@@ -58,7 +53,7 @@ function appendOrder(order) {
       orders.push(order);
       await fs.writeFile(ordersPath, `${JSON.stringify(orders, null, 2)}\n`, 'utf8');
     } catch (e) {
-      console.error('[storage] Error guardando pedido:', e.message);
+      console.error('[storage] Error:', e.message);
     }
   });
 }
@@ -81,7 +76,7 @@ async function markIdempotencyKey(key) {
       }
       await fs.writeFile(idempotencyPath, `${JSON.stringify(events, null, 2)}\n`, 'utf8');
     } catch (e) {
-      console.error('[storage] Error actualizando idempotencia:', e.message);
+      console.error('[storage] Error:', e.message);
     }
   });
 }
@@ -110,7 +105,7 @@ async function sendText(to, body) {
   const baseUrl = (process.env.KAPSO_API_URL || 'https://api.kapso.ai').replace(/\/$/, '');
   const phoneNumberId = process.env.KAPSO_PHONE_NUMBER_ID;
   const apiKey = process.env.KAPSO_API_KEY;
-  if (!phoneNumberId || !apiKey) throw new Error('Faltan KAPSO_PHONE_NUMBER_ID o KAPSO_API_KEY en las variables.');
+  if (!phoneNumberId || !apiKey) throw new Error('Faltan KAPSO_PHONE_NUMBER_ID o KAPSO_API_KEY en Vercel.');
 
   const response = await fetch(`${baseUrl}/meta/whatsapp/v24.0/${encodeURIComponent(phoneNumberId)}/messages`, {
     method: 'POST',
@@ -123,30 +118,23 @@ async function sendText(to, body) {
 
 async function notifyOrder(order) {
   if (!process.env.ORDER_NOTIFICATION_WEBHOOK) return;
-  const response = await fetch(process.env.ORDER_NOTIFICATION_WEBHOOK, {
+  await fetch(process.env.ORDER_NOTIFICATION_WEBHOOK, {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(order), signal: AbortSignal.timeout(8000)
   });
-  if (!response.ok) throw new Error(`El webhook de aviso respondió ${response.status}`);
 }
 
-// Endpoints de salud
 app.get('/', (_req, res) => res.status(200).json({ ok: true, service: 'alitas-papoy-whatsapp-bot' }));
 app.get('/health', (_req, res) => res.status(200).json({ ok: true, service: 'alitas-papoy-whatsapp-bot' }));
 
-// Endpoints de verificación para Meta/Kapso
 const handleVerify = (req, res) => {
-  if (req.query['hub.verify_token'] !== process.env.WEBHOOK_VERIFY_TOKEN) return res.sendStatus(403);
+  if (req.query['hub.verify_token'] !== process.env.WEBHOOK_VERHOOK_TOKEN) return res.sendStatus(403);
   return res.status(200).send(req.query['hub.challenge'] || 'ok');
 };
 app.get('/webhook/whatsapp', handleVerify);
-app.get('/webhook', handleVerify);
 
-// Handler principal del Webhook
+// Handler sincronizado para Serverless (Vercel)
 const handleWebhook = async (req, res, next) => {
   try {
-    // Si deseas reactivar validación estricta de firma, descomenta la siguiente línea:
-    // if (!validSignature(req)) return res.status(401).json({ error: 'Firma de webhook inválida.' });
-
     const eventKey = req.get('X-Idempotency-Key');
     if (await hasIdempotencyKey(eventKey)) return res.status(200).json({ ok: true, duplicate: true });
 
@@ -156,50 +144,40 @@ const handleWebhook = async (req, res, next) => {
     const messages = inboundMessages(req.body);
     if (!messages.length) return res.status(200).json({ ok: true, ignored: true });
 
-    // ⚡ 1. RESPONDER A KAPSO DE INMEDIATO (EVITA EL TIMEOUT/FAILED EN KAPSO)
-    res.status(200).json({ ok: true, processing: true, count: messages.length });
+    const responses = [];
+    for (const message of messages) {
+      const messageKey = message.id && `message:${message.id}`;
+      if (await hasIdempotencyKey(messageKey)) continue;
 
-    // 🔄 2. PROCESAR MENSAJES Y LLAMAR A LA IA EN SEGUNDO PLANO
-    (async () => {
-      for (const message of messages) {
-        try {
-          const messageKey = message.id && `message:${message.id}`;
-          if (await hasIdempotencyKey(messageKey)) continue;
+      console.log(`💬 Procesando mensaje de ${message.to}: "${message.body}"`);
 
-          console.log(`💬 Procesando mensaje de ${message.to}: "${message.body}"`);
-          const result = await handleMessage(message.to, message.body);
+      // 1. Procesar lógica del bot
+      const result = await handleMessage(message.to, message.body);
 
-          if (result.order) await appendOrder(result.order);
-          await sendText(message.to, result.reply);
-          if (result.order) await notifyOrder(result.order);
-          await markIdempotencyKey(messageKey);
-          console.log(`✅ Respuesta enviada con éxito a ${message.to}`);
-        } catch (err) {
-          console.error(`❌ Error procesando mensaje de ${message.to}:`, err.message);
-        }
-      }
-      await markIdempotencyKey(eventKey);
-    })();
+      // 2. Enviar respuesta a WhatsApp (AWAIT OBLIGATORIO EN VERCEL)
+      if (result.order) await appendOrder(result.order);
+      await sendText(message.to, result.reply);
+      if (result.order) await notifyOrder(result.order);
+      await markIdempotencyKey(messageKey);
+
+      responses.push({ messageId: message.id, state: result.state });
+    }
+    await markIdempotencyKey(eventKey);
+
+    // 3. Responder a Kapso una vez completado el envío
+    return res.status(200).json({ ok: true, processed: responses.length, responses });
 
   } catch (error) {
+    console.error('[webhook-error]', error.message);
     return next(error);
   }
 };
 
-// Escuchar peticiones POST tanto en la raíz '/' como en '/webhook/whatsapp'
 app.post('/', handleWebhook);
 app.post('/webhook/whatsapp', handleWebhook);
 
-app.use((error, _req, res, _next) => {
-  console.error('[webhook]', error.message);
-  if (!res.headersSent) {
-    res.status(500).json({ error: 'No se pudo procesar el webhook.' });
-  }
-});
-
-// Inicio del servidor HTTP
 if (!process.env.VERCEL) {
-  app.listen(port, () => console.log(`ALITAS PAPOY escuchando en el puerto ${port}`));
+  app.listen(port, () => console.log(`ALITAS PAPOY escuchando en puerto ${port}`));
 }
 
 module.exports = app;
