@@ -1,30 +1,56 @@
 {
-  "business": {
-    "name": "ALITAS PAPOY",
-    "phone": "921 359 855",
-    "location": "Los Olivos, Lima",
-    "schedule": "Lunes a viernes, 6 PM en adelante",
-    "estimatedDelivery": "30-40 minutos",
-    "paymentInstructions": { "transfer": "Banco o billetera digital: un asesor te enviará los datos." }
+  "alitas": {
+    "business": {
+      "name": "Alitas Papoy",
+      "location": "Delivery / entrega desde casa",
+      "phone": "+51923108449",
+      "schedule": "Lunes a Viernes desde 6:00 PM",
+      "estimatedDelivery": "30 a 45 minutos",
+      "paymentInstructions": {
+        "transfer": "Efectivo al recibir o Yape/Plin/Transferencia"
+      }
+    },
+    "flavors": [
+      {
+        "id": "bbq",
+        "name": "BBQ",
+        "price": 22,
+        "description": "Porción de 6 alitas + porción de papas sazonadas"
+      },
+      {
+        "id": "acevichado",
+        "name": "Acevichado",
+        "price": 22,
+        "description": "Porción de 6 alitas + porción de papas sazonadas"
+      },
+      {
+        "id": "buffalo",
+        "name": "Búfalo",
+        "price": 22,
+        "description": "Porción de 6 alitas + porción de papas sazonadas"
+      }
+    ]
   },
-  "flavors": [
-    { "id": "acevichado", "name": "Acevichado", "price": 18, "description": "Alitas marinadas con limón, ajo y rocoto" },
-    { "id": "buffalo", "name": "Buffalo", "price": 18, "description": "Picante y cremoso, salsa de búfalo" },
-    { "id": "bbq", "name": "BBQ", "price": 19, "description": "Ahumado y dulce, salsa BBQ" },
-    { "id": "crispy", "name": "Crispy", "price": 17, "description": "Sin salsa, crocante y dorado" }
-  ],
-  "combos": [
-    { "id": "combo-2-sabores", "name": "Combo 2 Sabores", "price": 45, "description": "2 porciones (elige sabores) + 1 bebida 500ml" },
-    { "id": "combo-3-sabores", "name": "Combo 3 Sabores", "price": 68, "description": "3 porciones (elige sabores) + 2 bebidas + papas fritas" },
-    { "id": "combo-pareja", "name": "Combo Pareja", "price": 50, "description": "2 porciones diferentes + 2 bebidas + salsa" }
-  ],
-  "drinks": [
-    { "id": "chicha-morada", "name": "Chicha Morada 500ml", "price": 5 },
-    { "id": "limonada", "name": "Limonada 500ml", "price": 5 },
-    { "id": "gaseosa", "name": "Gaseosa 500ml", "price": 6 }
-  ],
-  "extras": [
-    { "id": "papas", "name": "Papas Fritas Medianas", "price": 8 },
-    { "id": "salsa-extra", "name": "Salsa Extra", "price": 2 }
-  ]
+  "bombardas": {
+    "business": {
+      "name": "Bombardas de Pétalos",
+      "phone": "+51923108449",
+      "schedule": "Atención todos los días",
+      "specs": "Mide 60 cm (tamaño único), alcanza hasta 3 metros de altura y contiene 10,000 pétalos.",
+      "colors": [
+        "Rojo",
+        "Blanco",
+        "Rosado",
+        "Lila",
+        "Melón",
+        "Celeste"
+      ],
+      "prices": {
+        "unit": "S/. 20.00 (Unidad)",
+        "wholesale": "S/. 18.00 (Por mayor)",
+        "dozen": "S/. 16.50 (A partir de 12 unidades)",
+        "box": "S/. 14.50 (Caja de 80 unidades)"
+      }
+    }
+  }
 }

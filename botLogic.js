@@ -1,10 +1,9 @@
 const crypto = require('crypto');
 const catalog = require('./catalog.json');
 
-// Almacenamiento temporal de sesiones en memoria
+// Mapa para gestionar sesiones y elecciones de negocio por usuario
 const sessions = new Map();
 
-// Funciones de formato y normalización de texto
 const money = (value) => `S/. ${Number(value).toFixed(2)}`;
 const normalize = (value = '') =>
   String(value)
@@ -13,152 +12,105 @@ const normalize = (value = '') =>
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '');
 
-// Verificación de horario de atención
-function isOpen(now = new Date()) {
-  const parts = new Intl.DateTimeFormat('en-US', {
-    timeZone: process.env.TIMEZONE || 'America/Lima',
-    weekday: 'short',
-    hour: '2-digit',
-    hourCycle: 'h23'
-  }).formatToParts(now);
+// --- MENÚS Y PLANTILLAS ---
 
-  const get = (type) => parts.find((part) => part.type === type)?.value;
-  const hour = Number(get('hour'));
-  const weekday = get('weekday');
-
-  const openHour = Number(process.env.BUSINESS_OPEN_HOUR || 18);
-  const closeHour = Number(process.env.BUSINESS_CLOSE_HOUR || 24);
-
-  return ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].includes(weekday) && hour >= openHour && hour < closeHour;
+function selectBusinessMenu() {
+  return `¡Hola! 👋 Bienvenido.\n\n¿Con qué negocio deseas comunicarte hoy?\n\n1️⃣ 🍗 **ALITAS PAPOY** (Alitas & Papas)\n2️⃣ 💥 **BOMBARDAS DE PÉTALOS** (Eventos & Fiestas)\n\n*(Escribe 1 o 2)*`;
 }
 
-// Plantillas de respuesta
-function welcome() {
-  return `¡Hola! 👋 Bienvenido a ${catalog.business.name}\n\nEstamos en ${catalog.business.location}, delivery/entrega desde casa.\n🕐 Abiertos de 6 PM en adelante.\n\n¿Qué deseas?\n1️⃣ VER SABORES\n2️⃣ VER COMBOS\n3️⃣ HACER PEDIDO\n0️⃣ CONTACTAR`;
+// --- ALITAS PAPOY ---
+function alitasWelcome() {
+  return `🍗 **BIENVENIDO A ALITAS PAPOY**\n\n${catalog.alitas.business.location}\n🕐 Horario: ${catalog.alitas.business.schedule}\n\n¿Qué deseas hacer?\n1️⃣ VER SABORES Y PRECIOS\n2️⃣ HACER PEDIDO\n0️⃣ CAMBIAR DE NEGOCIO / INICIO`;
 }
 
-function flavors() {
-  return `🍗 NUESTROS SABORES\n\n${catalog.flavors.map((x, i) => `${i + 1}. ${x.name.toUpperCase()} - ${money(x.price)}\n   ${x.description}`).join('\n\n')}\n\nCada porción = 6 alitas\n\n¿Deseas hacer un pedido? Escribe PEDIDO`;
+function alitasFlavors() {
+  const lista = catalog.alitas.flavors
+    .map((x, i) => `${i + 1}. **${x.name.toUpperCase()}** - ${money(x.price)}\n   Incluye: ${x.description}`)
+    .join('\n\n');
+  return `🍗 **NUESTROS SABORES**\n\n${lista}\n\n¿Deseas pedir? Escribe **2** o **PEDIDO**.`;
 }
 
-function combos() {
-  return `🎁 COMBOS ESPECIALES\n\n${catalog.combos.map((x) => `📦 ${x.name.toUpperCase()} - ${money(x.price)}\n   ${x.description}`).join('\n\n')}\n\n¿Te interesa? Escribe PEDIDO`;
+// --- BOMBARDAS ---
+function bombardasWelcome() {
+  const b = catalog.bombardas.business;
+  const colores = b.colors.join(', ');
+  return `💥 **BOMBARDAS DE PÉTALOS**\n\n✨ **Detalles:** ${b.specs}\n🎨 **Colores disponibles:** ${colores}\n\n💰 **PRECIOS:**\n• Unidad: ${b.prices.unit}\n• Por mayor: ${b.prices.wholesale}\n• Desde 12 unid. (Docena): ${b.prices.dozen}\n• Desde Caja (80 unid.): ${b.prices.box}\n\n¿Qué deseas hacer?\n1️⃣ HACER PEDIDO DE BOMBARDAS\n2️⃣ HABLAR CON UN ASESOR\n0️⃣ CAMBIAR DE NEGOCIO / INICIO`;
 }
 
-function contact() {
-  return `📞 CONTACTO DIRECTO\n\nWhatsApp: ${catalog.business.phone}\nUbicación: ${catalog.business.location}\nHorario: ${catalog.business.schedule}\n\nUna PERSONA te atenderá inmediatamente.\n¡Gracias!`;
-}
-
-function prompt() {
-  return `✅ CONFIRMANDO TU PEDIDO\n\nEnvíame productos con cantidades, tu nombre y dirección exacta.\n\nEjemplo:\n"2 Acevichado, 1 Buffalo, 2 Chicha Morada, papas, mi nombre es Juan, vivo en Jr. Los Andes 123"`;
-}
-
-// Utilidades para extraer cantidades e ítems del texto enviado por el usuario
-function quantityBefore(text, aliases) {
-  const names = aliases.map((x) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|');
-  const withQuantity = new RegExp(`(?:^|[,;\\n]\\s*|\\b)(\\d+)\\s*(?:x\\s*)?(?:${names})\\b`, 'i').exec(text);
-  return withQuantity ? Number(withQuantity[1]) : new RegExp(`\\b(?:${names})\\b`, 'i').test(text) ? 1 : 0;
-}
-
-function findItems(body) {
-  const source = normalize(body);
-  const products = [
-    ...catalog.flavors.map((x) => ({ ...x, aliases: [normalize(x.name)] })),
-    ...catalog.combos.map((x) => ({ ...x, aliases: [normalize(x.name)] })),
-    ...catalog.drinks.map((x) => ({ ...x, aliases: [normalize(x.name), normalize(x.name.replace(' 500ml', ''))] })),
-    ...catalog.extras.map((x) => ({ ...x, aliases: x.id === 'papas' ? ['papas', 'papa', 'papas fritas'] : ['salsa extra'] }))
-  ];
-  return products.map(({ aliases, ...item }) => ({ ...item, quantity: quantityBefore(source, aliases) })).filter((x) => x.quantity > 0);
-}
-
-const capture = (text, expression) => expression.exec(text)?.[1]?.trim();
-const parseName = (text) => capture(text, /(?:mi nombre es|nombre\s*:?)\s+([^,;.\n]+)/i);
-const parseAddress = (text) => capture(text, /(?:vivo en|direcci[oó]n\s*:?|dir\.?\s*:?)\s+([^\n]+)/i);
-
-function summary(draft) {
-  const total = draft.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  draft.total = total;
-  const details = draft.items.map((x) => `${x.quantity}x ${x.name} (${money(x.price)}) = ${money(x.price * x.quantity)}`).join('\n');
-  return `📋 RESUMEN DE TU PEDIDO\n\n${details}\n\nTOTAL: ${money(total)}\n\n📍 Dirección: ${draft.address}\n👤 Nombre: ${draft.name}\n⏱️ Tiempo estimado: ${catalog.business.estimatedDelivery}\n\n¿Confirmas? Escribe:\n✅ SI\n❌ NO / MODIFICAR`;
-}
-
-function payment() {
-  return `✅ PEDIDO CONFIRMADO\n\nTus opciones de pago:\n\n💵 EFECTIVO\nPaga al momento de la entrega\n\n💳 TRANSFERENCIA\n${catalog.business.paymentInstructions.transfer}\n\nUna PERSONA te contactará en breve para confirmar dirección y cobro.\n\n¿DUDA? Llama: ${catalog.business.phone}\n¡Gracias! 🎉`;
-}
-
-// Lógica principal de la máquina de estados del chatbot
+// --- LÓGICA PRINCIPAL DEL BOT ---
 async function handleMessage(chatId, body) {
   const text = normalize(body);
+  const session = sessions.get(chatId) || { state: 'CHOOSE_BUSINESS', business: null };
 
-  if (!isOpen()) {
-    return { reply: 'Estamos cerrados. Abrimos de lunes a viernes desde las 6 PM.', state: 'CLOSED' };
+  // Comandos globales para reiniciar o cambiar de negocio
+  if (['0', 'inicio', 'cambiar', 'menu', 'menú', 'hola'].includes(text) && session.state !== 'CHOOSE_BUSINESS') {
+    sessions.set(chatId, { state: 'CHOOSE_BUSINESS', business: null });
+    return { reply: selectBusinessMenu(), state: 'CHOOSE_BUSINESS' };
   }
 
-  const session = sessions.get(chatId) || { state: 'MENU' };
-
-  if (text === '0' || text.includes('contactar')) {
-    sessions.set(chatId, { state: 'MENU' });
-    return { reply: contact(), state: 'MENU' };
+  // PASO 1: Selección inicial de negocio
+  if (session.state === 'CHOOSE_BUSINESS' || !session.business) {
+    if (text === '1' || text.includes('alita') || text.includes('papoy')) {
+      sessions.set(chatId, { state: 'ALITAS_MENU', business: 'ALITAS' });
+      return { reply: alitasWelcome(), state: 'ALITAS_MENU' };
+    }
+    if (text === '2' || text.includes('bombarda') || text.includes('petalo')) {
+      sessions.set(chatId, { state: 'BOMBARDAS_MENU', business: 'BOMBARDAS' });
+      return { reply: bombardasWelcome(), state: 'BOMBARDAS_MENU' };
+    }
+    return { reply: selectBusinessMenu(), state: 'CHOOSE_BUSINESS' };
   }
 
-  if (session.state === 'CONFIRMING') {
-    if (/^(si|sí|confirmo|confirmar)$/.test(text)) {
-      const order = {
-        id: `PAPOY-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`,
-        nombre: session.draft.name,
-        sabores: session.draft.items.filter((x) => catalog.flavors.some((f) => f.id === x.id)),
-        productos: session.draft.items,
-        total: session.draft.total,
-        direccion: session.draft.address,
-        timestamp: new Date().toISOString(),
-        chatId,
-        status: 'confirmed'
+  // PASO 2A: Flujo de ALITAS PAPOY
+  if (session.business === 'ALITAS') {
+    if (text === '1' || text.includes('sabor')) {
+      return { reply: alitasFlavors(), state: 'ALITAS_MENU' };
+    }
+    if (text === '2' || text.includes('pedido')) {
+      sessions.set(chatId, { ...session, state: 'ALITAS_ORDERING' });
+      return {
+        reply: `✅ **PEDIDO DE ALITAS**\n\nPor favor indícame:\n- Sabores y cantidad\n- Tu Nombre\n- Dirección exacta\n\n*Ejemplo: 2 Acevichado, 1 BBQ, mi nombre es Juan, vivo en Av. Perú 123*`,
+        state: 'ALITAS_ORDERING'
       };
-      sessions.set(chatId, { state: 'MENU' });
-      return { reply: payment(), state: 'MENU', order };
     }
-
-    if (/^(no|modificar)/.test(text)) {
-      sessions.set(chatId, { state: 'ORDERING', draft: session.draft });
-      return { reply: `De acuerdo. ${prompt()}`, state: 'ORDERING' };
+    if (session.state === 'ALITAS_ORDERING') {
+      const orderId = `PAPOY-${Date.now()}-${crypto.randomUUID().slice(0, 4)}`;
+      sessions.set(chatId, { state: 'ALITAS_MENU', business: 'ALITAS' });
+      return {
+        reply: `🎉 **¡PEDIDO RECIBIDO!**\n\nCódigo: ${orderId}\nHemos registrado tu mensaje: "${body}"\n\nUn asesor de Alitas Papoy confirmará el cobro y entrega por aquí en breve.`,
+        state: 'ALITAS_MENU'
+      };
     }
-
-    return { reply: 'Responde SI para confirmar o NO / MODIFICAR para cambiar el pedido.', state: 'CONFIRMING' };
+    return { reply: alitasWelcome(), state: 'ALITAS_MENU' };
   }
 
-  if (session.state === 'ORDERING') {
-    const draft = {
-      ...(session.draft || {}),
-      items: findItems(body).length ? findItems(body) : session.draft?.items || [],
-      name: parseName(body) || session.draft?.name,
-      address: parseAddress(body) || session.draft?.address
-    };
-
-    const missing = [
-      !draft.items.length && 'productos y cantidades',
-      !draft.name && 'tu nombre (ej. mi nombre es Ana)',
-      !draft.address && 'tu dirección (ej. vivo en Jr. ...)'
-    ].filter(Boolean);
-
-    if (missing.length) {
-      sessions.set(chatId, { state: 'ORDERING', draft });
-      return { reply: `Para armar el resumen me falta: ${missing.join(', ')}.\n\n${prompt()}`, state: 'ORDERING' };
+  // PASO 2B: Flujo de BOMBARDAS
+  if (session.business === 'BOMBARDAS') {
+    if (text === '1' || text.includes('pedido')) {
+      sessions.set(chatId, { ...session, state: 'BOMBARDAS_ORDERING' });
+      return {
+        reply: `💥 **PEDIDO DE BOMBARDAS**\n\nPor favor indícame:\n- Cantidad de unidades/cajas\n- Colores que deseas\n- Tu nombre y ciudad/dirección\n\n*Ejemplo: 12 bombardas (6 rojas, 6 blancas), mi nombre es Maria, para Lima.*`,
+        state: 'BOMBARDAS_ORDERING'
+      };
     }
-
-    sessions.set(chatId, { state: 'CONFIRMING', draft });
-    return { reply: summary(draft), state: 'CONFIRMING' };
+    if (text === '2' || text.includes('asesor') || text.includes('contacto')) {
+      return {
+        reply: `📞 **CONTACTO BOMBARDAS**\n\nUn asesor humano te responderá por este chat en unos momentos.\nSi deseas regresar al menú principal escribe **0**.`,
+        state: 'BOMBARDAS_MENU'
+      };
+    }
+    if (session.state === 'BOMBARDAS_ORDERING') {
+      const orderId = `BOMBARDA-${Date.now()}-${crypto.randomUUID().slice(0, 4)}`;
+      sessions.set(chatId, { state: 'BOMBARDAS_MENU', business: 'BOMBARDAS' });
+      return {
+        reply: `🎉 **¡SOLICITUD DE BOMBARDAS RECIBIDA!**\n\nCódigo: ${orderId}\nDetalle recibido: "${body}"\n\nTe responderemos en breve con la cotización exacta y datos de pago.`,
+        state: 'BOMBARDAS_MENU'
+      };
+    }
+    return { reply: bombardasWelcome(), state: 'BOMBARDAS_MENU' };
   }
 
-  if (text === '1' || text.includes('sabor')) return { reply: flavors(), state: 'MENU' };
-  if (text === '2' || text.includes('combo')) return { reply: combos(), state: 'MENU' };
-  if (text === '3' || text.includes('pedido')) {
-    sessions.set(chatId, { state: 'ORDERING' });
-    return { reply: prompt(), state: 'ORDERING' };
-  }
-
-  if (['hola', 'buenas', 'inicio', 'menu', 'menú'].includes(text)) return { reply: welcome(), state: 'MENU' };
-
-  return { reply: 'Disculpa, no entiendo. Escribe: 1 (sabores), 2 (combos), 3 (pedido), 0 (contactar)', state: 'MENU' };
+  return { reply: selectBusinessMenu(), state: 'CHOOSE_BUSINESS' };
 }
 
-module.exports = { handleMessage, isOpen, welcome };
+module.exports = { handleMessage };
